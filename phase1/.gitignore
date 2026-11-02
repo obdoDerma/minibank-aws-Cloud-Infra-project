@@ -1,0 +1,7 @@
+# Never commit these to GitHub
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+crash.log
+*.plan

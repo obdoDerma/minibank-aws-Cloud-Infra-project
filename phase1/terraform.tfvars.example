@@ -1,0 +1,6 @@
+# Copy this file to "terraform.tfvars" and put your real email.
+# terraform.tfvars is loaded automatically by Terraform.
+
+budget_email     = "you@example.com"
+budget_limit_usd = "5"
+region           = "eu-central-1"

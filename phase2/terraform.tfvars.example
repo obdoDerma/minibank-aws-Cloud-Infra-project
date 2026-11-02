@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and put your real email.
+
+alert_email      = "you@example.com"
+budget_limit_usd = "3"
+region           = "eu-central-1"
+
+# Cost switches:
+db_multi_az          = true   # false = cheaper, but no DB failover test
+enable_ssm_endpoints = false  # true = shell into private servers (+~$0.04/hour)

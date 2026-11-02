@@ -1,0 +1,71 @@
+#!/bin/bash
+# Runs once at first boot of EVERY server Auto Scaling launches.
+# Builds a status page that proves the whole chain works:
+#   ALB -> this private server -> S3 (via endpoint) -> RDS (via security groups)
+# Values in $${...} are filled in by Terraform: db_host, bucket, region.
+
+# IMDSv2: get a token, then read this server's identity
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+md() { curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+IID=$(md instance-id)
+AZ=$(md placement/availability-zone)
+PIP=$(md local-ipv4)
+
+# Web server: nginx from the AL2023 repo (reached through the S3 gateway endpoint).
+# Fallback: Python's built-in web server, so the site still comes up if dnf fails.
+WEBROOT=/usr/share/nginx/html
+if dnf install -y nginx; then
+  SERVER="nginx"
+else
+  SERVER="python3 fallback (dnf failed - check S3 endpoint)"
+  WEBROOT=/var/www
+  mkdir -p $WEBROOT
+fi
+
+# Test 1: read a file from the private S3 bucket using the server's IAM role
+if S3MSG=$(aws s3 cp "s3://${bucket}/welcome.txt" - --region ${region} 2>&1); then
+  S3STATUS="OK - $S3MSG"
+else
+  S3STATUS="FAILED - $S3MSG"
+fi
+
+# Test 2: can this server open TCP 3306 to the database?
+if timeout 5 bash -c "</dev/tcp/${db_host}/3306" 2>/dev/null; then
+  DBSTATUS="reachable on 3306"
+else
+  DBSTATUS="NOT reachable"
+fi
+
+cat > $WEBROOT/index.html <<HTML
+<html><head><title>MiniBank</title></head>
+<body style="font-family:Arial;background:#0b1f33;color:#fff;text-align:center;padding-top:60px">
+<h1>MiniBank - Phase 2</h1>
+<p>Behind an Application Load Balancer, served by a PRIVATE server (no public IP).</p>
+<table style="margin:30px auto;text-align:left;border-collapse:collapse" cellpadding="8">
+<tr><td>Instance</td><td><b>$IID</b></td></tr>
+<tr><td>Availability Zone</td><td><b>$AZ</b></td></tr>
+<tr><td>Private IP</td><td>$PIP</td></tr>
+<tr><td>Web server</td><td>$SERVER</td></tr>
+<tr><td>S3 via IAM role + endpoint</td><td>$S3STATUS</td></tr>
+<tr><td>Database</td><td>$DBSTATUS</td></tr>
+</table>
+<p style="color:#9fb3c8">Refresh the page: the instance / AZ changes = load balancing.</p>
+</body></html>
+HTML
+
+if [ "$SERVER" = "nginx" ]; then
+  systemctl enable --now nginx
+else
+  cat > /etc/systemd/system/fallback-web.service <<UNIT
+[Unit]
+Description=Fallback web server
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 80 --directory $WEBROOT
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now fallback-web
+fi
